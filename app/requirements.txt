@@ -1,0 +1,7 @@
+fastapi==0.136.3
+uvicorn[standard]==0.48.0
+ib-insync==0.9.86
+nest-asyncio==1.6.0
+numpy==2.4.6
+python-dotenv==1.2.2
+httpx

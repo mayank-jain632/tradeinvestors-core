@@ -1,0 +1,15 @@
+[Unit]
+Description=Solo Trader Execution Engine
+After=network.target ibgateway.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/solo-trader/app
+EnvironmentFile=/opt/solo-trader/.env
+ExecStart=/opt/solo-trader/app/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8001
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

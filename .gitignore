@@ -1,0 +1,29 @@
+# Environment
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Data
+*.db
+*.json
+logs/
+
+# IBGateway
+gateway/ibgateway/
+gateway/jars/
+gateway/*.log
+gateway/*.ibgzenc
+gateway/*/
+
+# IBC logs
+ibc/*/logs/
+ibc/*/scripts/
+
+# OS
+.DS_Store

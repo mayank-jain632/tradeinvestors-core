@@ -1,0 +1,15 @@
+[Unit]
+Description=IB Gateway via IBC
+After=network.target
+Before=solo-trader.service
+
+[Service]
+Type=simple
+User=root
+Environment=DISPLAY_NUM=1
+ExecStart=/opt/solo-trader/scripts/start-ibgateway.sh
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
