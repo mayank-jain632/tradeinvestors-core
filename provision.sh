@@ -18,7 +18,6 @@ JAVAFX_URL="https://download2.gluonhq.com/openjfx/${JAVAFX_VERSION}/openjfx-${JA
 PYTHON_URL="https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tar.xz"
 
 # ── Parameters ────────────────────────────────────────────────────────────────
-# Pass as environment variables or edit defaults below.
 IBKR_USER="${IBKR_USER:-}"
 IBKR_PASS="${IBKR_PASS:-}"
 IB_ACCOUNT="${IB_ACCOUNT:-}"
@@ -47,7 +46,7 @@ for var in IBKR_USER IBKR_PASS IB_ACCOUNT SOLO_TRADER_SECRET OPS_API_KEY CLIENT_
 done
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# BASE_DIR is the repo root — populated by git clone below.
 BASE_DIR="/root/trader"
 GATEWAY_DIR="${BASE_DIR}/gateway"
 IBC_DIR="${BASE_DIR}/ibc"
@@ -129,20 +128,20 @@ fi
 # 4. IB Gateway ${IBGATEWAY_MAJOR} (stable channel)
 # =============================================================================
 log "Checking IB Gateway ${IBGATEWAY_MAJOR}..."
-IBGATEWAY_INSTALL="${GATEWAY_DIR}"
-if [[ -d "${IBGATEWAY_INSTALL}/${IBGATEWAY_MAJOR}" ]]; then
-  skip "IB Gateway ${IBGATEWAY_MAJOR} already installed at ${IBGATEWAY_INSTALL}"
+# The installer creates <GATEWAY_DIR>/ibgateway/<version>/ for the jars.
+if [[ -d "${GATEWAY_DIR}/ibgateway/${IBGATEWAY_MAJOR}" ]]; then
+  skip "IB Gateway ${IBGATEWAY_MAJOR} already installed at ${GATEWAY_DIR}/ibgateway/${IBGATEWAY_MAJOR}"
 else
   log "Downloading IB Gateway (stable, ~320 MB)..."
-  mkdir -p "${IBGATEWAY_INSTALL}"
+  mkdir -p "${GATEWAY_DIR}"
   TMPIBGW=$(mktemp -d)
   wget -q "${IBGATEWAY_URL}" -O "${TMPIBGW}/ibgateway-installer.sh"
   chmod +x "${TMPIBGW}/ibgateway-installer.sh"
   # install4j silent install; -dir sets the install root
-  bash "${TMPIBGW}/ibgateway-installer.sh" -q -dir "${IBGATEWAY_INSTALL}" \
-    || bash "${TMPIBGW}/ibgateway-installer.sh" -q -overwrite -dir "${IBGATEWAY_INSTALL}"
+  bash "${TMPIBGW}/ibgateway-installer.sh" -q -dir "${GATEWAY_DIR}" \
+    || bash "${TMPIBGW}/ibgateway-installer.sh" -q -overwrite -dir "${GATEWAY_DIR}"
   rm -rf "${TMPIBGW}"
-  ok "IB Gateway installed at ${IBGATEWAY_INSTALL}"
+  ok "IB Gateway installed at ${GATEWAY_DIR}"
 fi
 
 
@@ -166,25 +165,68 @@ fi
 
 
 # =============================================================================
-# 6. App files from repo
+# 6. Deploy key + SSH config (must come before git clone)
 # =============================================================================
-log "Deploying app files..."
-mkdir -p "${APP_DIR}/dashboard" "${SCRIPTS_DIR}" "${DATA_DIR}"
+log "Setting up deploy key..."
+DEPLOY_KEY_PATH="/root/.ssh/deploy_key_${CLIENT_ID}"
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
 
-cp "${REPO_DIR}/app/app.py"          "${APP_DIR}/"
-cp "${REPO_DIR}/app/config.py"       "${APP_DIR}/"
-cp "${REPO_DIR}/app/ledger.py"       "${APP_DIR}/"
-cp "${REPO_DIR}/app/logger.py"       "${APP_DIR}/"
-cp "${REPO_DIR}/app/state.py"        "${APP_DIR}/"
-cp "${REPO_DIR}/app/requirements.txt" "${APP_DIR}/"
-cp "${REPO_DIR}/app/dashboard/index.html" "${APP_DIR}/dashboard/"
-ok "App files copied to ${APP_DIR}"
+if [[ -f "${DEPLOY_KEY_PATH}" ]]; then
+  skip "Deploy key already exists at ${DEPLOY_KEY_PATH}"
+else
+  ssh-keygen -t ed25519 -C "deploy-${CLIENT_ID}@$(hostname)" -f "${DEPLOY_KEY_PATH}" -N ""
+  ok "Deploy key created at ${DEPLOY_KEY_PATH}"
+fi
+
+# Add SSH host alias (guarded against duplicates on re-run)
+if ! grep -q "Host github-${CLIENT_ID}" /root/.ssh/config 2>/dev/null; then
+  cat >> /root/.ssh/config << SSHCFG
+
+# Auto-added by provision.sh for ${CLIENT_ID}
+Host github-${CLIENT_ID}
+  HostName github.com
+  User git
+  IdentityFile ${DEPLOY_KEY_PATH}
+  IdentitiesOnly yes
+SSHCFG
+  ok "SSH config entry added for github-${CLIENT_ID}"
+else
+  skip "SSH config entry already present"
+fi
+
+# Print key and pause so the user can add it to GitHub before clone
+echo ""
+echo "── Deploy public key ──────────────────────────────────────────"
+cat "${DEPLOY_KEY_PATH}.pub"
+echo "───────────────────────────────────────────────────────────────"
+echo ""
+echo "  Add the key above to GitHub:"
+echo "  https://github.com/mayank-jain632/tradeinvestors-core/settings/keys"
+echo ""
+read -r -p "  Press Enter once the deploy key has been added to GitHub... "
 
 
 # =============================================================================
-# 7. Python venv + dependencies
+# 7. Clone repo (or pull if already present)
+# =============================================================================
+log "Syncing repo from GitHub..."
+if [[ -d "${BASE_DIR}/.git" ]]; then
+  cd "${BASE_DIR}"
+  git pull
+  ok "Repo already present — pulled latest"
+else
+  git clone "git@github-${CLIENT_ID}:mayank-jain632/tradeinvestors-core.git" "${BASE_DIR}"
+  ok "Repo cloned to ${BASE_DIR}"
+fi
+
+
+# =============================================================================
+# 8. App files + Python venv
 # =============================================================================
 log "Setting up Python venv..."
+mkdir -p "${DATA_DIR}" "${SCRIPTS_DIR}"
+
 if [[ ! -f "${APP_DIR}/venv/bin/activate" ]]; then
   /usr/local/bin/python3.11 -m venv "${APP_DIR}/venv"
   ok "venv created"
@@ -197,11 +239,11 @@ ok "Python dependencies installed"
 
 
 # =============================================================================
-# 8. IBC config.ini
+# 9. IBC config.ini
 # =============================================================================
 log "Writing IBC config.ini..."
 IBC_INI="${IBC_DIR}/config.ini"
-cp "${REPO_DIR}/ibc/config.ini" "${IBC_INI}"
+cp "${BASE_DIR}/ibc/config.ini" "${IBC_INI}"
 sed -i "s|^IbLoginId=.*|IbLoginId=${IBKR_USER}|"      "${IBC_INI}"
 sed -i "s|^IbPassword=.*|IbPassword=${IBKR_PASS}|"    "${IBC_INI}"
 sed -i "s|^IbDir=.*|IbDir=${GATEWAY_DIR}|"            "${IBC_INI}"
@@ -209,7 +251,7 @@ ok "IBC config.ini written"
 
 
 # =============================================================================
-# 9. IBC gatewaystart.sh — patch paths
+# 10. IBC gatewaystart.sh — patch paths
 # =============================================================================
 log "Configuring IBC gatewaystart.sh..."
 GATEWAY_SH="${IBC_DIR}/gatewaystart.sh"
@@ -224,21 +266,20 @@ if [[ -f "${GATEWAY_SH}" ]]; then
   chmod +x "${GATEWAY_SH}"
   ok "gatewaystart.sh patched"
 else
-  echo "  WARNING: ${GATEWAY_SH} not found — IBC zip may have different structure"
+  echo "  WARNING: ${GATEWAY_SH} not found — IBC zip may have a different structure"
 fi
 
 
 # =============================================================================
-# 10. gateway/jts.ini
+# 11. gateway/jts.ini
 # =============================================================================
 log "Writing gateway jts.ini..."
-mkdir -p "${GATEWAY_DIR}"
-cp "${REPO_DIR}/gateway/jts.ini" "${GATEWAY_DIR}/jts.ini"
+cp "${BASE_DIR}/gateway/jts.ini" "${GATEWAY_DIR}/jts.ini"
 ok "jts.ini copied to ${GATEWAY_DIR}"
 
 
 # =============================================================================
-# 11. start-ibgateway.sh
+# 12. start-ibgateway.sh
 # =============================================================================
 log "Writing start-ibgateway.sh..."
 cat > "${SCRIPTS_DIR}/start-ibgateway.sh" << STARTSCRIPT
@@ -275,7 +316,7 @@ ok "start-ibgateway.sh written"
 
 
 # =============================================================================
-# 12. .env
+# 13. .env
 # =============================================================================
 log "Writing .env..."
 cat > "${BASE_DIR}/.env" << ENV
@@ -299,7 +340,7 @@ ok ".env written (mode 600)"
 
 
 # =============================================================================
-# 13. Systemd service files
+# 14. Systemd service files
 # =============================================================================
 log "Installing systemd services..."
 
@@ -345,7 +386,7 @@ ok "ibgateway.service and solo-trader.service enabled"
 
 
 # =============================================================================
-# 14. UFW firewall — allow solo-trader port
+# 15. UFW firewall — allow solo-trader port
 # =============================================================================
 log "Configuring firewall..."
 if command -v ufw &>/dev/null; then
@@ -354,39 +395,6 @@ if command -v ufw &>/dev/null; then
 else
   skip "ufw not installed, skipping firewall rule"
 fi
-
-
-# =============================================================================
-# 15. Deploy key for GitHub
-# =============================================================================
-log "Setting up deploy key..."
-DEPLOY_KEY_PATH="/root/.ssh/deploy_key_${CLIENT_ID}"
-if [[ -f "${DEPLOY_KEY_PATH}" ]]; then
-  skip "Deploy key already exists at ${DEPLOY_KEY_PATH}"
-else
-  ssh-keygen -t ed25519 -C "deploy-${CLIENT_ID}@$(hostname)" -f "${DEPLOY_KEY_PATH}" -N ""
-  ok "Deploy key created at ${DEPLOY_KEY_PATH}"
-fi
-
-# Configure git SSH for this deploy key
-mkdir -p /root/.ssh
-cat >> /root/.ssh/config << SSHCFG
-
-# Auto-added by provision.sh for ${CLIENT_ID}
-Host github-${CLIENT_ID}
-  HostName github.com
-  User git
-  IdentityFile ${DEPLOY_KEY_PATH}
-  IdentitiesOnly yes
-SSHCFG
-
-# Set repo remote to use the keyed host alias (if this IS the repo dir)
-if [[ -d "${REPO_DIR}/.git" ]]; then
-  cd "${REPO_DIR}"
-  git remote set-url origin "git@github-${CLIENT_ID}:mayank-jain632/tradeinvestors-core.git" 2>/dev/null || true
-fi
-
-ok "git configured to use deploy key"
 
 
 # =============================================================================
@@ -426,27 +434,20 @@ printf "║  Base dir   : %-47s║\n" "${BASE_DIR}"
 printf "║  Data dir   : %-47s║\n" "${DATA_DIR}"
 echo "╠══════════════════════════════════════════════════════════════╣"
 echo "║  NEXT STEPS:                                                 ║"
-echo "║                                                              ║"
-echo "║  1. Add this deploy public key to GitHub:                    ║"
-echo "║     Settings → Deploy keys → Add key (read-only)            ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
-echo "── Deploy public key ──────────────────────────────────────────"
-cat "${DEPLOY_KEY_PATH}.pub"
-echo "───────────────────────────────────────────────────────────────"
-echo ""
-echo "  2. Once key is added, start the services:"
+echo "  1. Start the services:"
 echo ""
 echo "     systemctl start ibgateway"
 echo "     systemctl start solo-trader"
 echo ""
-echo "  3. Add this instance to the relay's clients.json on the"
+echo "  2. Add this instance to the relay's clients.json on the"
 echo "     central VPS:"
 echo ""
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "YOUR_VPS_IP")
 echo '     {"client_id": "'"${CLIENT_ID}"'", "endpoint": "http://'"${VPS_IP}"':8001", "active": true}'
 echo ""
-echo "  4. Monitor logs:"
+echo "  3. Monitor logs:"
 echo "     journalctl -u ibgateway -f"
 echo "     journalctl -u solo-trader -f"
 echo ""
