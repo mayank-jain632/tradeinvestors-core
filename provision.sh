@@ -139,9 +139,11 @@ fi
 # 4. IB Gateway ${IBGATEWAY_MAJOR} (stable channel)
 # =============================================================================
 log "Checking IB Gateway ${IBGATEWAY_MAJOR}..."
-# The installer creates <GATEWAY_DIR>/ibgateway/<version>/ for the jars.
-if [[ -d "${GATEWAY_DIR}/ibgateway/${IBGATEWAY_MAJOR}" ]]; then
-  skip "IB Gateway ${IBGATEWAY_MAJOR} already installed"
+# The installer creates <GATEWAY_DIR>/app/ibgateway (the launcher binary).
+# Use that as the sentinel — it's version-independent and only exists after
+# a successful install4j run.
+if [[ -f "${GATEWAY_DIR}/app/ibgateway" ]]; then
+  skip "IB Gateway already installed at ${GATEWAY_DIR}/app/ibgateway"
 else
   log "Downloading IB Gateway (stable, ~320 MB)..."
   mkdir -p "${GATEWAY_DIR}"
